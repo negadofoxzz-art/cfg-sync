@@ -133,6 +133,14 @@ try {
     Write-Host "---STDOUT---"
     Write-Host $stdoutAll
     Write-Host "---END---"
+    Write-Host "---GHOST CHECK (1s delay)---"
+    Start-Sleep -Seconds 1
+    $ghosts = @(Get-Process dwm -EA SilentlyContinue)
+    foreach ($g in $ghosts) {
+        $pp = (Get-WmiObject Win32_Process -Filter "ProcessId=$($g.Id)" -EA SilentlyContinue).ParentProcessId
+        Write-Host ("dwm pid={0,-6} start={1} parent_pid={2}" -f $g.Id, $g.StartTime.ToString('HH:mm:ss.fff'), $pp)
+    }
+    Write-Host "---GHOST CHECK END---"
 } catch {
     Write-Host "SPAWN EXCEPTION: $_"
 }
