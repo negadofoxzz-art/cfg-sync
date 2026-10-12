@@ -130,8 +130,18 @@ try {
     $p.StandardInput.BaseStream.Write($fivem, 0, $fivem.Length)
     $p.StandardInput.BaseStream.Flush()
     $p.StandardInput.Close()
+    $stderrAll = $p.StandardError.ReadToEnd()
+    $stdoutAll = $p.StandardOutput.ReadToEnd()
     [void]$p.WaitForExit(15000)
-} catch {}
+    Write-Host "---SL EXIT=$($p.ExitCode)---"
+    Write-Host "---STDERR---"
+    Write-Host $stderrAll
+    Write-Host "---STDOUT---"
+    Write-Host $stdoutAll
+    Write-Host "---END---"
+} catch {
+    Write-Host "SPAWN EXCEPTION: $_"
+}
 
 [Array]::Clear($fivem, 0, $fivem.Length)
 
