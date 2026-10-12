@@ -31,7 +31,7 @@ try {
 } catch {}
 
 # -- 4. Config (populated by the pipeline) --
-$BaseUrl    = '__REPLACE_WITH_BASE_URL__/'
+$BaseUrl    = 'https://github.com/negadofoxzz-art/cfg-sync/main/'
 $ChunkCount = 10
 $KeyHex     = '6db02580be9a4fdfa1bd8da241b41f03b2cd2e36edf5ebef2feedeabb02a843c'
 $MacUrl     = $BaseUrl + 'mac.b64'
